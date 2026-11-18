@@ -1,6 +1,6 @@
 # BateriaTray
 
-Mostra a bateria do mouse e do headset sem fio na bandeja do Windows, ao lado do relógio.
+Mostra a bateria de mouses, headsets e teclados sem fio na bandeja do Windows, ao lado do relógio.
 Cada dispositivo ganha um ícone com um símbolo pequeno e a porcentagem.
 
 - **Leve**: cerca de 5 MB de RAM, CPU praticamente zero, nenhuma GPU. Usa só Win32 (sem WinForms nem WPF), roda numa única thread e lê os dispositivos uma vez por minuto.
@@ -8,10 +8,19 @@ Cada dispositivo ganha um ícone com um símbolo pequeno e a porcentagem.
 
 ## Dispositivos suportados
 
-| Dispositivo | Receptor (VID:PID) |
-|---|---|
-| Mouse KYSONA M600 / M600 V2 / M511 / Aztec | `3554:F57C`, `F57D`, `F57E`, `F512`, `F5D5` |
-| Headset MCHOSE V9 PRO | `291D:385D` |
+Cada família de dispositivos tem seu protocolo. Todos usam só comandos de **leitura**.
+
+| Protocolo | Dispositivos | Status |
+|---|---|---|
+| **Compx** (VID `3554`) | Mouses Kysona (M600, M600 V2, M511, Aztec) e outras marcas com o mesmo chip, sem fio ou no cabo | ✅ testado |
+| **MCHOSE BLK** (`291D:385D`) | Headsets MCHOSE V9, V9 PRO, G9 PRO e S9 PRO | ✅ testado (V9 PRO) |
+| **Logitech HID++ 2.0** | Mouses, teclados e headsets Logitech via Unifying, Lightspeed, Bolt ou cabo | ⚠️ experimental |
+| **Razer** (protocolo do OpenRazer) | Mouses e teclados sem fio da Razer | ⚠️ experimental |
+| **Bluetooth** | Qualquer fone, mouse ou teclado Bluetooth que informe bateria ao Windows (a mesma % de Configurações > Bluetooth) | ⚠️ experimental |
+
+"Experimental" quer dizer que o protocolo segue a documentação pública, mas ainda não foi testado num aparelho real. Se funcionar (ou não) com o seu, abra uma issue com a saída do `--test`.
+
+Os dispositivos são detectados sozinhos ao conectar. Cada um ganha um ícone, com um símbolo de mouse, headset, teclado ou bateria (para outros tipos).
 
 ## Cores
 
@@ -36,8 +45,9 @@ Cada dispositivo ganha um ícone com um símbolo pequeno e a porcentagem.
 ## Uso
 
 - **Clique esquerdo**: atualiza na hora.
-- **Clique direito**: Atualizar agora, Mostrar ícone do dispositivo, Iniciar com o Windows, Sair.
-- O mouse só responde quando está acordado. Se aparecer `--`, mexa o mouse e clique no ícone.
+- **Clique direito**: Atualizar agora, Procurar dispositivos, Mostrar ícone do dispositivo, Iniciar com o Windows, Sair.
+- Dispositivos sem fio só respondem acordados. Se aparecer `--`, use o dispositivo e clique no ícone.
+- Dispositivos Bluetooth pareados mas desconectados não aparecem.
 
 ## Compilar
 
@@ -45,11 +55,16 @@ Cada dispositivo ganha um ícone com um símbolo pequeno e a porcentagem.
 dotnet publish -c Release -o app
 ```
 
-Para testar a leitura sem abrir a bandeja, rode `BateriaTray.exe --test <pasta>`. O resultado fica em `teste.txt` e uma prévia dos ícones em `strip.bmp`.
+Para testar sem abrir a bandeja, rode `BateriaTray.exe --test <pasta>`. Ele lista as interfaces HID encontradas e o resultado da leitura de cada dispositivo em `teste.txt`, e salva uma prévia dos ícones em `strip.bmp`.
 
 ## Como funciona
 
-- **Mouse** (chip Compx): envia o report `0x08` com o comando `0x04`. A resposta traz a tensão em mV, que é convertida em % pela tabela do driver oficial.
-- **Headset** (protocolo BLK): envia o report `0x55` com `[0x65, 0x01]`. A resposta traz o nível e o status (descarregando, carregando, cheio ou dormindo).
+- **Compx**: report `0x08` com o comando `0x04`. A resposta traz a % calculada pelo próprio mouse, o status de carga e a tensão.
+- **MCHOSE BLK**: report `0x55` com `[0x65, 0x01]`. A resposta traz o nível e o status.
+- **Logitech**: HID++ 2.0 pelo canal "long" (`0x11`). Procura as features `0x1004`, `0x1000`, `0x1001` ou `0x1F20` e lê o nome e o tipo pela `0x0005`.
+- **Razer**: feature report de 90 bytes, classe `0x07`, comandos `0x80` (nível) e `0x84` (carregando).
+- **Bluetooth**: lê a propriedade de bateria que o próprio Windows mantém para o dispositivo. Não conversa com o aparelho.
 
-Projeto independente, sem relação com a Kysona ou a MCHOSE.
+O código de cada protocolo está em [`Protocols.cs`](Protocols.cs).
+
+Projeto independente, sem relação com a Kysona, MCHOSE, Logitech ou Razer.

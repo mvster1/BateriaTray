@@ -1,61 +1,31 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using static BateriaTray.N;
 
 namespace BateriaTray;
 
-internal sealed class Dev
-{
-    public readonly uint Id;
-    public readonly bool IsMouse;
-    public string Name;
-    public nint H = -1;          // handle HID aberto (overlapped)
-    public bool Present;         // receptor/dongle conectado
-    public int Pct = -1;         // última % conhecida
-    public int MilliVolts;
-    public bool Charging, Full, Asleep;
-    public string ReadAt = "";   // hora da última leitura válida
-    public long NextPoll;
-    public nint Icon;
-    public bool Shown, LowWarned;
-    public string LastSig;       // evita redesenhar o ícone sem mudança
-    public Dev(uint id, bool mouse, string name) { Id = id; IsMouse = mouse; Name = name; }
-}
-
 internal static unsafe class App
 {
     const uint WM_TRAY = 0x8001, WM_DESTROY = 0x0002, WM_TIMER = 0x0113, WM_DEVICECHANGE = 0x0219,
                WM_POWERBROADCAST = 0x0218, WM_SETTINGCHANGE = 0x001A, WM_LBUTTONUP = 0x0202, WM_RBUTTONUP = 0x0205;
     const uint NIM_ADD = 0, NIM_MODIFY = 1, NIM_DELETE = 2, NIF_MESSAGE = 1, NIF_ICON = 2, NIF_TIP = 4, NIF_INFO = 0x10;
-    const int TICK_MS = 10_000, POLL_OK_MS = 60_000, POLL_RETRY_MS = 20_000;
+    const int TICK_MS = 10_000, POLL_OK_MS = 60_000, POLL_RETRY_MS = 20_000, RESCAN_MS = 300_000;
 
-    // Mouse Kysona (chip Compx, VID 0x3554): report 0x08, 17 bytes, checksum = 0x55 - soma.
-    const ushort MOUSE_VID = 0x3554, MOUSE_UP = 0xFF02;
-    static readonly ushort[] MousePids = { 0xF57C, 0xF57D, 0xF57E, 0xF512, 0xF5D5 };
-    // Tabela tensão(mV) -> % do driver oficial (BatteryParam): 0%,5%,...,100%
-    static readonly ushort[] MouseVolt = { 3050, 3420, 3480, 3540, 3600, 3660, 3720, 3760, 3800, 3840, 3880,
-                                           3920, 3940, 3960, 3980, 4000, 4020, 4040, 4060, 4080, 4110 };
-    // Headset MCHOSE V9 PRO (protocolo BLK): report 0x55, 64 bytes, cmd 0x65.
-    const ushort HS_VID = 0x291D, HS_PID = 0x385D, HS_UP = 0xFF90;
+    // VIDs de receptores/dispositivos com protocolo conhecido (o resto nem é aberto)
+    static readonly string[] Vids = { "vid_3554", "vid_291d", "vid_046d", "vid_1532" };
 
-    static readonly Dev Mouse = new(1, true, "Mouse");
-    static readonly Dev Headset = new(2, false, "Headset");
-    static readonly Dev[] Devs = { Headset, Mouse };
-
-    static nint _hwnd, _evt;
+    static readonly List<Dev> Devs = new();
+    static nint _hwnd;
     static uint _wmTaskbarCreated;
-    static byte* _tx, _rx;
-    static bool _lightTheme;
+    static bool _lightTheme, _showGlyph = true;
     static int _ticks, _promoteTries;
-    static bool _showGlyph = true;
+    static long _lastScan;
 
     static int Main(string[] args)
     {
-        _evt = CreateEventW(0, 1, 0, null);
-        _tx = (byte*)NativeMemory.AllocZeroed(128);
-        _rx = (byte*)NativeMemory.AllocZeroed(128);
-
+        Hid.Init();
         if (args.Length >= 1 && args[0] == "--test")
             return RunTest(args.Length > 1 ? args[1] : ".");
 
@@ -100,7 +70,7 @@ internal static unsafe class App
                 case WM_TRAY:
                     uint ev = (uint)(l & 0xFFFF);
                     if (ev == WM_RBUTTONUP) ShowMenu();
-                    else if (ev == WM_LBUTTONUP) { foreach (var d in Devs) d.NextPoll = 0; Tick(); }
+                    else if (ev == WM_LBUTTONUP) RefreshNow();
                     return 0;
                 case WM_TIMER:
                     if (w == 2) { KillTimer(h, 2); Rescan(); }
@@ -141,25 +111,84 @@ internal static unsafe class App
         return DefWindowProcW(h, m, w, l);
     }
 
-    // ===================== agendamento =====================
+    // ===================== varredura e leitura =====================
+
+    static void RefreshNow()
+    {
+        foreach (var d in Devs) d.NextPoll = 0;
+        Tick();
+    }
 
     static void Tick()
     {
         long now = Environment.TickCount64;
+        // Revarre de tempos em tempos: acha dispositivos Logitech/Razer que estavam dormindo.
+        if (now - _lastScan >= RESCAN_MS) { Rescan(); return; }
         foreach (var d in Devs)
         {
             if (!d.Present || now < d.NextPoll) continue;
-            bool ok = d.IsMouse ? PollMouse(d) : PollHeadset(d);
-            d.NextPoll = now + (ok ? POLL_OK_MS : POLL_RETRY_MS);
+            var r = Poll(d);
+            if (r == PollResult.Lost) { d.H = -1; d.Asleep = true; SetTimer(_hwnd, 2, 3000, 0); }
+            else if (r == PollResult.Asleep) d.Asleep = true;
+            d.NextPoll = now + (r == PollResult.Ok ? POLL_OK_MS : POLL_RETRY_MS);
         }
         UpdateIcons();
         if (++_ticks % 360 == 0) TrimMemory(); // a cada ~1h
     }
 
+    static PollResult Poll(Dev d)
+    {
+        if (d.Proto != Proto.Bluetooth && d.H == -1) return PollResult.Asleep;
+        try
+        {
+            return d.Proto switch
+            {
+                Proto.Compx => Compx.Poll(d),
+                Proto.Blk => Blk.Poll(d),
+                Proto.Logitech => Logitech.Poll(d),
+                Proto.Razer => Razer.Poll(d),
+                _ => Bluetooth.Poll(d),
+            };
+        }
+        catch { return PollResult.Asleep; }
+    }
+
+    static List<Dev> Scan(out List<Hid.Iface> ifs)
+    {
+        Hid.CloseAll();
+        var found = new List<Dev>();
+        ifs = Hid.Enumerate(Vids);
+        try { Compx.Scan(ifs, found); } catch { }
+        try { Blk.Scan(ifs, found); } catch { }
+        try { Logitech.Scan(ifs, found); } catch { }
+        try { Razer.Scan(ifs, found); } catch { }
+        try { Bluetooth.Scan(found); } catch { }
+        return found;
+    }
+
     static void Rescan()
     {
-        foreach (var d in Devs) { if (d.H != -1) CloseHandle(d.H); d.H = -1; d.Present = false; }
-        ScanHid();
+        _lastScan = Environment.TickCount64;
+        var found = Scan(out var ifs);
+
+        // Junta com a lista atual mantendo o estado (última %, horário) de quem já era conhecido.
+        foreach (var f in found)
+        {
+            var e = Devs.Find(x => x.Key == f.Key);
+            if (e == null) { f.Present = true; Devs.Add(f); continue; }
+            e.H = f.H; e.H2 = f.H2; e.Path = f.Path; e.DevIdx = f.DevIdx; e.FeatIdx = f.FeatIdx; e.Feat = f.Feat;
+            e.TxId = f.TxId; e.InstanceId = f.InstanceId; e.Name = f.Name; e.Kind = f.Kind; e.Present = true;
+        }
+        for (int i = Devs.Count - 1; i >= 0; i--)
+        {
+            var d = Devs[i];
+            if (found.Exists(f => f.Key == d.Key)) continue;
+            // Logitech/Razer dormindo não respondem à varredura: mantém enquanto o receptor estiver conectado.
+            if ((d.Proto == Proto.Logitech || d.Proto == Proto.Razer) && d.Path != null && ifs.Exists(x => x.Path == d.Path))
+            { d.H = -1; d.H2 = -1; d.Asleep = true; continue; }
+            RemoveIcon(d);
+            Devs.RemoveAt(i);
+        }
         foreach (var d in Devs) d.NextPoll = 0;
         Tick();
     }
@@ -170,147 +199,6 @@ internal static unsafe class App
         SetProcessWorkingSetSize(GetCurrentProcess(), -1, -1);
     }
 
-    // ===================== HID =====================
-
-    static void ScanHid()
-    {
-        Guid g; HidD_GetHidGuid(&g);
-        nint set = SetupDiGetClassDevsW(&g, null, 0, 0x02 | 0x10 /*PRESENT|DEVICEINTERFACE*/);
-        if (set == -1) return;
-        SP_DEVICE_INTERFACE_DATA did = default;
-        did.cbSize = (uint)sizeof(SP_DEVICE_INTERFACE_DATA);
-        byte* detail = stackalloc byte[2048];
-        char* name = stackalloc char[128];
-        for (uint i = 0; SetupDiEnumDeviceInterfaces(set, 0, &g, i, &did) != 0; i++)
-        {
-            *(uint*)detail = 8; // sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_W) em x64
-            if (SetupDiGetDeviceInterfaceDetailW(set, &did, detail, 2048, null, 0) == 0) continue;
-            char* path = (char*)(detail + 4);
-            var span = new ReadOnlySpan<char>(path, 1000);
-            span = span[..span.IndexOf('\0')];
-            if (!span.Contains("vid_3554", StringComparison.OrdinalIgnoreCase) &&
-                !span.Contains("vid_291d", StringComparison.OrdinalIgnoreCase)) continue;
-
-            nint q = CreateFileW(path, 0, 3, 0, 3, 0, 0); // só consulta (sem acesso R/W)
-            if (q == -1) continue;
-            HIDD_ATTRIBUTES a = default; a.Size = (uint)sizeof(HIDD_ATTRIBUTES);
-            HIDP_CAPS caps = default;
-            nint pp = 0;
-            bool okAttr = HidD_GetAttributes(q, &a) != 0;
-            if (okAttr && HidD_GetPreparsedData(q, &pp) != 0) { HidP_GetCaps(pp, &caps); HidD_FreePreparsedData(pp); }
-            Dev target = null;
-            if (okAttr && a.VendorID == MOUSE_VID && Array.IndexOf(MousePids, a.ProductID) >= 0 &&
-                caps.UsagePage == MOUSE_UP && caps.OutputReportByteLength == 17) target = Mouse;
-            else if (okAttr && a.VendorID == HS_VID && a.ProductID == HS_PID &&
-                caps.UsagePage == HS_UP && caps.OutputReportByteLength == 64) target = Headset;
-            if (target != null && target.H == -1)
-            {
-                name[0] = '\0';
-                if (HidD_GetProductString(q, name, 254) != 0 && name[0] != '\0')
-                    target.Name = new string(name).Trim();
-            }
-            CloseHandle(q);
-            if (target == null || target.H != -1) continue;
-
-            nint hnd = CreateFileW(path, 0xC0000000 /*GENERIC_READ|WRITE*/, 3, 0, 3, 0x40000000 /*OVERLAPPED*/, 0);
-            if (hnd == -1) continue;
-            target.H = hnd;
-            target.Present = true;
-        }
-        SetupDiDestroyDeviceInfoList(set);
-    }
-
-    // Escreve um report e espera a resposta cujo rx[idx]==val (rx[0] é o report id). Retorna false em timeout.
-    static bool Transact(nint h, uint txLen, byte reportId, int idx, byte val, int timeoutMs, out bool ioError)
-    {
-        ioError = false;
-        HidD_FlushQueue(h);
-        OVERLAPPED ov = default; ov.hEvent = _evt; ResetEvent(_evt);
-        uint n = 0;
-        if (WriteFile(h, _tx, txLen, &n, &ov) == 0)
-        {
-            if (Marshal.GetLastPInvokeError() != ERROR_IO_PENDING) { ioError = true; return false; }
-            if (WaitForSingleObject(_evt, 1000) != 0) { CancelIo(h); GetOverlappedResult(h, &ov, &n, 1); ioError = true; return false; }
-        }
-        if (GetOverlappedResult(h, &ov, &n, 0) == 0) { ioError = true; return false; }
-
-        long deadline = Environment.TickCount64 + timeoutMs;
-        while (true)
-        {
-            long rem = deadline - Environment.TickCount64;
-            if (rem <= 0) return false;
-            ov = default; ov.hEvent = _evt; ResetEvent(_evt);
-            if (ReadFile(h, _rx, 128, &n, &ov) == 0)
-            {
-                if (Marshal.GetLastPInvokeError() != ERROR_IO_PENDING) { ioError = true; return false; }
-                if (WaitForSingleObject(_evt, (uint)rem) != 0) { CancelIo(h); GetOverlappedResult(h, &ov, &n, 1); return false; }
-            }
-            if (GetOverlappedResult(h, &ov, &n, 0) == 0) { ioError = true; return false; }
-            if (n > idx && _rx[0] == reportId && _rx[idx] == val) return true;
-        }
-    }
-
-    static void Lost(Dev d)
-    {
-        if (d.H != -1) CloseHandle(d.H);
-        d.H = -1; d.Present = false;
-        SetTimer(_hwnd, 2, 3000, 0); // tenta reabrir
-    }
-
-    static bool PollMouse(Dev d)
-    {
-        NativeMemory.Clear(_tx, 17);
-        _tx[0] = 0x08; _tx[1] = 0x04; // comando: ler bateria
-        byte sum = 0; for (int i = 0; i < 16; i++) sum += _tx[i];
-        _tx[16] = (byte)(0x55 - sum);
-
-        bool io = false, ok = false;
-        for (int attempt = 0; attempt < 2 && !ok && !io; attempt++)
-            ok = Transact(d.H, 17, 0x08, 1, 0x04, 250, out io);
-        if (io) { Lost(d); return false; }
-        if (!ok) { d.Asleep = true; return false; } // mouse dormindo: o receptor não repassa a consulta
-
-        int raw = _rx[6];
-        int mv = (_rx[8] << 8) | _rx[9];
-        d.MilliVolts = mv;
-        d.Pct = (mv >= 2500 && mv <= 4500) ? VoltToPct(mv) : Math.Min(raw, 100);
-        d.Charging = _rx[7] == 1;
-        d.Full = _rx[7] == 2;
-        d.Asleep = false;
-        d.ReadAt = Now();
-        return true;
-    }
-
-    static int VoltToPct(int mv)
-    {
-        var t = MouseVolt;
-        if (mv <= t[0]) return 0;
-        if (mv >= t[^1]) return 100;
-        for (int i = 1; i < t.Length; i++)
-            if (mv < t[i]) return (i - 1) * 5 + (mv - t[i - 1]) * 5 / (t[i] - t[i - 1]);
-        return 100;
-    }
-
-    static bool PollHeadset(Dev d)
-    {
-        NativeMemory.Clear(_tx, 64);
-        _tx[0] = 0x55; _tx[1] = 0x65; _tx[2] = 0x01; // report 0x55, cmd 0x65 (bateria)
-        bool io = false, ok = false;
-        for (int attempt = 0; attempt < 2 && !ok && !io; attempt++)
-            ok = Transact(d.H, 64, 0x55, 1, 0x65, 400, out io);
-        if (io) { Lost(d); return false; }
-        if (!ok) { d.Asleep = true; return false; }
-
-        int level = _rx[2], status = _rx[3];
-        if (status == 26) { d.Asleep = true; return true; } // headset desligado/dormindo
-        d.Pct = Math.Min(level, 100);
-        d.Charging = status == 3;
-        d.Full = status == 4;
-        d.Asleep = false;
-        d.ReadAt = Now();
-        return true;
-    }
-
     // ===================== bandeja =====================
 
     static void UpdateIcons()
@@ -318,9 +206,12 @@ internal static unsafe class App
         foreach (var d in Devs) UpdateIcon(d);
     }
 
+    static string AsleepWord(Dev d) =>
+        d.Proto == Proto.Bluetooth ? "desconectado" : d.Kind == Kind.Headset ? "desligado" : "dormindo";
+
     static void UpdateIcon(Dev d)
     {
-        if (!d.Present) { RemoveIcon(d); return; }
+        if (!d.Present || d.Hidden) { RemoveIcon(d); return; }
 
         string text = d.Pct < 0 ? "–" : d.Pct.ToString();
         // Cor pelo nível: verde = cheio, amarelo = metade, vermelho = acabando.
@@ -332,43 +223,50 @@ internal static unsafe class App
 
         string state;
         if (d.Pct < 0)
-            state = d.IsMouse ? "Aguardando leitura (mexa o mouse)" : (d.Asleep ? "Desligado" : "Aguardando leitura");
+            state = d.Asleep && d.Kind == Kind.Headset ? "Desligado"
+                  : "Aguardando leitura" + (d.Kind == Kind.Mouse ? " (mexa o mouse)" : d.Asleep ? " (use o dispositivo)" : "");
         else if (d.Asleep)
-            state = $"{d.Pct}% · {(d.IsMouse ? "dormindo" : "desligado")} (lido às {d.ReadAt})";
+            state = $"{d.Pct}% · {AsleepWord(d)} (lido às {d.ReadAt})";
         else
-            state = $"{d.Pct}% · {(d.Charging ? "carregando" : d.Full ? "carga completa" : "descarregando")}";
+            state = d.Proto == Proto.Bluetooth ? $"{d.Pct}% · Bluetooth"
+                  : $"{d.Pct}% · {(d.Charging ? "carregando" : d.Full ? "carga completa" : "descarregando")}";
         string tip = d.Name + "\n" + state;
 
-        // Símbolo do dispositivo (pequeno, à esquerda do número), neutro; cinza se dormindo.
-        int glyph = !_showGlyph ? Render.GlyphNone : d.IsMouse ? Render.GlyphMouse : Render.GlyphHeadset;
-        // Símbolo: cinza = dormindo/sem leitura, azul = carregando, normal = em uso.
+        // Símbolo do dispositivo (pequeno, à esquerda do número).
+        // Cinza = dormindo/sem leitura, azul = carregando, normal = em uso.
+        int glyph = !_showGlyph ? Render.GlyphNone : d.Kind switch
+        {
+            Kind.Mouse => Render.GlyphMouse,
+            Kind.Headset => Render.GlyphHeadset,
+            Kind.Keyboard => Render.GlyphKeyboard,
+            _ => Render.GlyphOther,
+        };
         uint gcolor = d.Pct < 0 || d.Asleep ? 0x8C8C8Cu
                     : d.Charging ? (_lightTheme ? 0x0078D4u : 0x4FC3F7u)
                     : _lightTheme ? 0x1A1A1Au : 0xFFFFFFu;
         string sig = text + "|" + color + "|" + glyph + "|" + gcolor + "|" + tip;
-        if (!d.Shown || sig != d.LastSig)
-        {
-            nint icon = Render.MakeIcon(text, color, glyph, gcolor);
-            NOTIFYICONDATAW nd = Nd(d.Id, icon, tip);
+        if (d.Shown && sig == d.LastSig) return;
 
-            // Aviso de bateria fraca (uma vez por ciclo de descarga)
-            if (d.Pct >= 0 && !d.Asleep)
+        nint icon = Render.MakeIcon(text, color, glyph, gcolor);
+        NOTIFYICONDATAW nd = Nd(d.Id, icon, tip);
+
+        // Aviso de bateria fraca (uma vez por ciclo de descarga)
+        if (d.Pct >= 0 && !d.Asleep)
+        {
+            if (d.Charging || d.Full || d.Pct > 20) d.LowWarned = false;
+            else if (d.Pct <= 15 && !d.LowWarned)
             {
-                if (d.Charging || d.Full || d.Pct > 20) d.LowWarned = false;
-                else if (d.Pct <= 15 && !d.LowWarned)
-                {
-                    d.LowWarned = true;
-                    nd.uFlags |= NIF_INFO;
-                    nd.dwInfoFlags = 2; // NIIF_WARNING
-                    Copy("Bateria fraca", nd.szInfoTitle, 64);
-                    Copy($"{d.Name}: {d.Pct}%", nd.szInfo, 256);
-                }
+                d.LowWarned = true;
+                nd.uFlags |= NIF_INFO;
+                nd.dwInfoFlags = 2; // NIIF_WARNING
+                Copy("Bateria fraca", nd.szInfoTitle, 64);
+                Copy($"{d.Name}: {d.Pct}%", nd.szInfo, 256);
             }
-            d.Shown = Put(&nd, d.Shown);
-            if (d.Icon != 0) DestroyIcon(d.Icon);
-            d.Icon = icon;
-            d.LastSig = sig;
         }
+        d.Shown = Put(&nd, d.Shown);
+        if (d.Icon != 0) DestroyIcon(d.Icon);
+        d.Icon = icon;
+        d.LastSig = sig;
     }
 
     static NOTIFYICONDATAW Nd(uint id, nint icon, string tip)
@@ -393,21 +291,16 @@ internal static unsafe class App
 
     static void RemoveIcon(Dev d)
     {
-        RemoveOne(d.Id, ref d.Shown, ref d.Icon, ref d.LastSig);
-    }
-
-    static void RemoveOne(uint id, ref bool shown, ref nint icon, ref string sig)
-    {
-        if (shown)
+        if (d.Shown)
         {
             NOTIFYICONDATAW nd = default;
             nd.cbSize = (uint)sizeof(NOTIFYICONDATAW);
-            nd.hWnd = _hwnd; nd.uID = id;
+            nd.hWnd = _hwnd; nd.uID = d.Id;
             Shell_NotifyIconW(NIM_DELETE, &nd);
-            shown = false;
+            d.Shown = false;
         }
-        if (icon != 0) { DestroyIcon(icon); icon = 0; }
-        sig = null;
+        if (d.Icon != 0) { DestroyIcon(d.Icon); d.Icon = 0; }
+        d.LastSig = null;
     }
 
     static void ShowMenu()
@@ -415,14 +308,17 @@ internal static unsafe class App
         nint menu = CreatePopupMenu();
         bool auto = AutoStart.IsEnabled();
         fixed (char* s1 = "Atualizar agora")
+        fixed (char* s5 = "Procurar dispositivos")
         fixed (char* s2 = "Iniciar com o Windows")
         fixed (char* s4 = "Mostrar ícone do dispositivo")
         fixed (char* s3 = "Sair")
         {
             AppendMenuW(menu, 0, 1, s1);
+            AppendMenuW(menu, 0, 4, s5);
+            AppendMenuW(menu, 0x800 /*MF_SEPARATOR*/, 0, null);
             AppendMenuW(menu, _showGlyph ? 0x8u : 0u, 3, s4);
             AppendMenuW(menu, auto ? 0x8u /*MF_CHECKED*/ : 0u, 2, s2);
-            AppendMenuW(menu, 0x800 /*MF_SEPARATOR*/, 0, null);
+            AppendMenuW(menu, 0x800, 0, null);
             AppendMenuW(menu, 0, 9, s3);
         }
         POINT p; GetCursorPos(&p);
@@ -431,7 +327,8 @@ internal static unsafe class App
         DestroyMenu(menu);
         switch (cmd)
         {
-            case 1: foreach (var d in Devs) d.NextPoll = 0; Tick(); break;
+            case 1: RefreshNow(); break;
+            case 4: Rescan(); break;
             case 2: AutoStart.Set(!auto); break;
             case 3:
                 _showGlyph = !_showGlyph;
@@ -459,39 +356,32 @@ internal static unsafe class App
         dst[n] = '\0';
     }
 
-    static string Now()
-    {
-        SYSTEMTIME t; GetLocalTime(&t);
-        return t.Hour.ToString("00") + ":" + t.Minute.ToString("00");
-    }
-
     // ===================== modo de teste =====================
-    // BateriaTray.exe --test <pasta> : faz uma leitura, grava resultado em teste.txt e os ícones em .bmp
+    // BateriaTray.exe --test <pasta> : varre, lê cada dispositivo uma vez e grava teste.txt (+ prévia dos ícones)
     static int RunTest(string dir)
     {
         var sb = new System.Text.StringBuilder();
-        ScanHid();
-        foreach (var d in Devs)
+        var found = Scan(out var ifs);
+        sb.Append("Interfaces HID consideradas: ").Append(ifs.Count).AppendLine();
+        foreach (var i in ifs)
+            sb.Append("  ").Append(i.Vid.ToString("X4")).Append(':').Append(i.Pid.ToString("X4"))
+              .Append(" up=").Append(i.UsagePage.ToString("X4")).Append(" in=").Append(i.InLen).Append(" out=").Append(i.OutLen)
+              .Append(" feat=").Append(i.FeatLen).Append(' ').Append(i.Product).AppendLine();
+        sb.Append("Dispositivos com bateria: ").Append(found.Count).AppendLine();
+        foreach (var d in found)
         {
-            sb.Append(d.IsMouse ? "[mouse] " : "[headset] ").Append(d.Name).Append(" presente=").Append(d.Present).AppendLine();
-            if (!d.Present) continue;
-            bool ok = d.IsMouse ? PollMouse(d) : PollHeadset(d);
-            sb.Append("  ok=").Append(ok).Append(" pct=").Append(d.Pct).Append(" mV=").Append(d.MilliVolts)
-              .Append(" carregando=").Append(d.Charging).Append(" cheio=").Append(d.Full).Append(" dormindo=").Append(d.Asleep).AppendLine();
-            if (ok)
-            {
-                sb.Append("  rx=");
-                int len = d.IsMouse ? 17 : 8;
-                for (int i = 0; i < len; i++) sb.Append(_rx[i].ToString("x2")).Append(' ');
-                sb.AppendLine();
-            }
+            var r = Poll(d);
+            sb.Append('[').Append(d.Proto).Append('/').Append(d.Kind).Append("] ").Append(d.Name)
+              .Append(" -> ").Append(r).Append(" pct=").Append(d.Pct).Append(" mV=").Append(d.MilliVolts)
+              .Append(" carregando=").Append(d.Charging).Append(" cheio=").Append(d.Full).AppendLine();
         }
         Directory.CreateDirectory(dir);
         File.WriteAllText(Path.Combine(dir, "teste.txt"), sb.ToString());
-        var items = new (string, uint, int)[] { ("100", 0x3DDC84u, Render.GlyphHeadset), ("85", 0x3DDC84u, Render.GlyphMouse),
-            ("60", 0x3DDC84u, Render.GlyphHeadset), ("45", 0xFFC83Du, Render.GlyphMouse), ("21", 0xFFC83Du, Render.GlyphHeadset),
-            ("20", 0xFF4D4Du, Render.GlyphMouse), ("8", 0xFF4D4Du, Render.GlyphHeadset), ("–", 0x8C8C8Cu, Render.GlyphMouse) };
+        var items = new (string, uint, int)[] { ("85", 0x3DDC84u, Render.GlyphMouse), ("45", 0xFFC83Du, Render.GlyphHeadset),
+            ("72", 0x3DDC84u, Render.GlyphKeyboard), ("12", 0xFF4D4Du, Render.GlyphOther), ("100", 0x3DDC84u, Render.GlyphHeadset),
+            ("–", 0x8C8C8Cu, Render.GlyphMouse) };
         Render.DumpStrip(Path.Combine(dir, "strip.bmp"), items);
+        Hid.CloseAll();
         return 0;
     }
 }

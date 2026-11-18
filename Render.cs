@@ -9,7 +9,7 @@ namespace BateriaTray;
 // (GDI puro, com alpha e antialiasing).
 internal static unsafe class Render
 {
-    public const int GlyphNone = 0, GlyphMouse = 1, GlyphHeadset = 2;
+    public const int GlyphNone = 0, GlyphMouse = 1, GlyphHeadset = 2, GlyphKeyboard = 3, GlyphOther = 4;
 
     public static string DigitFace = "Bahnschrift SemiBold Condensed";
     public static int DigitWeight = 600;
@@ -104,6 +104,8 @@ internal static unsafe class Render
     static readonly string[] CharDash = { "....", "....", "....", "....", "####", "....", "....", "....", "...." };
     static readonly string[] MouseArt = { ".###.", "#.#.#", "#.#.#", "#####", "#...#", "#...#", "#...#", "#...#", ".###." };
     static readonly string[] HeadsetArt = { ".####.", "#....#", "#....#", "#....#", "##..##", "##..##", "##..##" };
+    static readonly string[] KeyboardArt = { "######", "#.#.##", "##.#.#", "#.#.##", "######" };
+    static readonly string[] OtherArt = { ".##.", "####", "#..#", "#..#", "####", "####", "####", "####" }; // bateria
 
     static void Blit(uint[] px, int sz, int scale, int ox, int oy, string[] art, uint rgb)
     {
@@ -135,7 +137,7 @@ internal static unsafe class Render
         int k = Math.Max(1, sz / 16), o = (sz - 16 * k) / 2;
 
         // Símbolo: colunas 0..5, centralizado na vertical
-        string[] art = glyph == GlyphMouse ? MouseArt : HeadsetArt;
+        string[] art = glyph switch { GlyphMouse => MouseArt, GlyphHeadset => HeadsetArt, GlyphKeyboard => KeyboardArt, _ => OtherArt };
         int aw = art[0].Length;
         Blit(outPx, sz, k, o + (6 - aw) / 2 * k, o + (16 - art.Length) / 2 * k, art, glyphRgb);
 

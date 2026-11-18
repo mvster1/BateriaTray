@@ -73,6 +73,15 @@ internal static unsafe partial class N
     [LibraryImport("hid.dll")] public static partial int HidP_GetCaps(nint pp, HIDP_CAPS* caps);
     [LibraryImport("hid.dll")] public static partial byte HidD_FlushQueue(nint h);
     [LibraryImport("hid.dll")] public static partial byte HidD_GetProductString(nint h, char* buf, uint bytes);
+    [LibraryImport("hid.dll")] public static partial byte HidD_SetFeature(nint h, byte* buf, uint len);
+    [LibraryImport("hid.dll")] public static partial byte HidD_GetFeature(nint h, byte* buf, uint len);
+
+    // ---------- cfgmgr32 (propriedades de dispositivos: bateria Bluetooth) ----------
+    [LibraryImport("cfgmgr32.dll")] public static partial uint CM_Get_Device_ID_List_SizeW(uint* len, char* filter, uint flags);
+    [LibraryImport("cfgmgr32.dll")] public static partial uint CM_Get_Device_ID_ListW(char* filter, char* buf, uint len, uint flags);
+    [LibraryImport("cfgmgr32.dll")] public static partial uint CM_Locate_DevNodeW(uint* devInst, char* id, uint flags);
+    [LibraryImport("cfgmgr32.dll")] public static partial uint CM_Get_DevNode_PropertyW(uint devInst, DEVPROPKEY* key, uint* type, byte* buf, uint* size, uint flags);
+    [LibraryImport("kernel32.dll")] public static partial void Sleep(uint ms);
 
     // ---------- advapi32 ----------
     [LibraryImport("advapi32.dll")] public static partial int RegOpenKeyExW(nint key, char* sub, uint opt, uint sam, nint* result);
@@ -147,6 +156,13 @@ internal struct BITMAPINFOHEADER
 {
     public uint biSize; public int biWidth, biHeight; public ushort biPlanes, biBitCount;
     public uint biCompression, biSizeImage; public int biXPelsPerMeter, biYPelsPerMeter; public uint biClrUsed, biClrImportant;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct DEVPROPKEY
+{
+    public Guid fmtid; public uint pid;
+    public DEVPROPKEY(string g, uint p) { fmtid = new Guid(g); pid = p; }
 }
 
 [StructLayout(LayoutKind.Sequential)]
