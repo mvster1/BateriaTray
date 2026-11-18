@@ -1,0 +1,7 @@
+bin/
+obj/
+app/
+.sf/
+.vs/
+*.user
+*.zip
