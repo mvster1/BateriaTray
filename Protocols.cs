@@ -49,7 +49,7 @@ internal static unsafe class Compx
             if (h == -1) continue;
             // Receptor sem fio e cabo ao mesmo tempo: guarda o segundo caminho como alternativa.
             if (existing != null) { if (existing.H2 == -1) existing.H2 = h; continue; }
-            found.Add(new Dev(Proto.Compx, Kind.Mouse, name, key) { H = h, Path = i.Path });
+            found.Add(new Dev(Proto.Compx, Kind.Mouse, name, key) { H = h, Path = i.Path, Vid = i.Vid, Pid = i.Pid });
         }
     }
 
@@ -112,7 +112,7 @@ internal static unsafe class Blk
             if (Proto_.Exists(found, key)) continue;
             nint h = Hid.OpenRW(i.Path);
             if (h == -1) continue;
-            found.Add(new Dev(Proto.Blk, Kind.Headset, name, key) { H = h, Path = i.Path });
+            found.Add(new Dev(Proto.Blk, Kind.Headset, name, key) { H = h, Path = i.Path, Vid = i.Vid, Pid = i.Pid });
         }
     }
 
@@ -222,7 +222,7 @@ internal static unsafe class Logitech
             name = "Logitech " + name;
 
         return new Dev(Proto.Logitech, kind, name, "logi:" + name)
-        { H = h, Path = iface.Path, DevIdx = idx, FeatIdx = bIdx, Feat = bFeat };
+        { H = h, Path = iface.Path, DevIdx = idx, FeatIdx = bIdx, Feat = bFeat, Vid = iface.Vid, Pid = iface.Pid };
     }
 
     public static PollResult Poll(Dev d)
@@ -296,7 +296,7 @@ internal static unsafe class Razer
             if (tx == 0) tx = asleepTx;
             if (tx == 0) { Hid.Release(h); continue; } // sem bateria / não responde
             var kind = i.UsagePage == 1 && i.Usage == 6 ? Kind.Keyboard : Kind.Mouse;
-            found.Add(new Dev(Proto.Razer, kind, name, key) { H = h, Path = i.Path, TxId = tx });
+            found.Add(new Dev(Proto.Razer, kind, name, key) { H = h, Path = i.Path, TxId = tx, Vid = i.Vid, Pid = i.Pid });
         }
     }
 

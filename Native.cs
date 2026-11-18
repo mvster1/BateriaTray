@@ -75,6 +75,9 @@ internal static unsafe partial class N
     [LibraryImport("hid.dll")] public static partial byte HidD_GetProductString(nint h, char* buf, uint bytes);
     [LibraryImport("hid.dll")] public static partial byte HidD_SetFeature(nint h, byte* buf, uint len);
     [LibraryImport("hid.dll")] public static partial byte HidD_GetFeature(nint h, byte* buf, uint len);
+    [LibraryImport("hid.dll")] public static partial byte HidD_GetInputReport(nint h, byte* buf, uint len);
+    [LibraryImport("hid.dll")] public static partial int HidP_GetValueCaps(int reportType, HIDP_VALUE_CAPS* caps, ushort* len, nint pp);
+    [LibraryImport("hid.dll")] public static partial int HidP_GetUsageValue(int reportType, ushort usagePage, ushort linkCollection, ushort usage, uint* value, nint pp, byte* report, uint reportLen);
 
     // ---------- cfgmgr32 (propriedades de dispositivos: bateria Bluetooth) ----------
     [LibraryImport("cfgmgr32.dll")] public static partial uint CM_Get_Device_ID_List_SizeW(uint* len, char* filter, uint flags);
@@ -143,6 +146,19 @@ internal unsafe struct HIDP_CAPS
     public ushort Usage, UsagePage, InputReportByteLength, OutputReportByteLength, FeatureReportByteLength;
     public fixed ushort Reserved[17];
     public fixed ushort Counts[10];
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct HIDP_VALUE_CAPS // 72 bytes
+{
+    public ushort UsagePage; public byte ReportID, IsAlias;
+    public ushort BitField, LinkCollection, LinkUsage, LinkUsagePage;
+    public byte IsRange, IsStringRange, IsDesignatorRange, IsAbsolute, HasNull, Reserved;
+    public ushort BitSize, ReportCount;
+    public fixed ushort Reserved2[5];
+    public uint UnitsExp, Units;
+    public int LogicalMin, LogicalMax, PhysicalMin, PhysicalMax;
+    public ushort Usage, UsageMax, StringMin, StringMax, DesignatorMin, DesignatorMax, DataIndexMin, DataIndexMax;
 }
 
 [StructLayout(LayoutKind.Sequential)]

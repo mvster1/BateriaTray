@@ -4,23 +4,35 @@ Mostra a bateria de mouses, headsets e teclados sem fio na bandeja do Windows, a
 Cada dispositivo ganha um ícone com um símbolo pequeno e a porcentagem.
 
 - **Leve**: cerca de 5 MB de RAM, CPU praticamente zero, nenhuma GPU. Usa só Win32 (sem WinForms nem WPF), roda numa única thread e lê os dispositivos uma vez por minuto.
-- **Sem driver do fabricante**: conversa direto com o receptor USB via HID. O MCHOSE HUB e o driver da KYSOAN podem ficar fechados.
+- **Sem software do fabricante**: conversa direto com o receptor USB via HID. Os apps oficiais podem ficar fechados.
 
 ## Dispositivos suportados
 
-Cada família de dispositivos tem seu protocolo. Todos usam só comandos de **leitura**.
+Todos os protocolos usam só comandos de **leitura**: nada de configuração, luz ou DPI é alterado.
 
-| Protocolo | Dispositivos | Status |
+| Marca / protocolo | Modelos | Status |
 |---|---|---|
-| **Compx** (VID `3554`) | Mouses Kysona (M600, M600 V2, M511, Aztec) e outras marcas com o mesmo chip, sem fio ou no cabo | ✅ testado |
-| **MCHOSE BLK** (`291D:385D`) | Headsets MCHOSE V9, V9 PRO, G9 PRO e S9 PRO | ✅ testado (V9 PRO) |
-| **Logitech HID++ 2.0** | Mouses, teclados e headsets Logitech via Unifying, Lightspeed, Bolt ou cabo | ⚠️ experimental |
-| **Razer** (protocolo do OpenRazer) | Mouses e teclados sem fio da Razer | ⚠️ experimental |
-| **Bluetooth** | Qualquer fone, mouse ou teclado Bluetooth que informe bateria ao Windows (a mesma % de Configurações > Bluetooth) | ⚠️ experimental |
+| **Compx** (VID `3554`) | Kysona M600 / M600 V2 / M511 / Aztec, VXE / ATK (R1, R1 Pro Max), VGN Dragonfly, Lamzu Atlantis, GravaStar, Pulsar (receptores Compx), G-Wolves, Dark Project, Redragon M916 PRO / M913 Impact Elite / M991 / G49 | ✅ testado (Kysona M600) |
+| **MCHOSE** | Headsets V9, V9 PRO, G9 PRO, S9 PRO | ✅ testado (V9 PRO) |
+| **Logitech** (HID++ 2.0) | Mouses, teclados e headsets via Unifying, Lightspeed (ex.: PRO X2 SUPERSTRIKE, G502 X), Bolt ou cabo | ⚠️ não testado |
+| **Razer** | Mouses e teclados sem fio | ⚠️ não testado |
+| **HyperX** | Cloud III Wireless, Cloud III S, Cloud II Wireless, Cloud II Core, Cloud Alpha Wireless, Cloud Alpha 2 Wireless, Cloud Flight, Pulsefire Haste 2 Wireless / Core Wireless | ⚠️ não testado |
+| **SteelSeries** | Arctis 1 / 7 / 9 / 7+, Arctis Nova 3P / 5 / 7 / Pro Wireless, Aerox 3 / 5 / 9 Wireless, Prime Wireless, Rival 3 Wireless, Rival 650 | ⚠️ não testado |
+| **Corsair** | Slipstream (mouses e teclados), HS80, Virtuoso, Void V2 (protocolo "Bragi"); Void / Void Pro / Void Elite / HS70 | ⚠️ não testado |
+| **Glorious** e afins | Model O / D / O- / D- Wireless, Model O 2 / D 2 PRO, Hitscan Hyperlight, G-Wolves, WLMouse YING | ⚠️ não testado |
+| **LAMZU** | Maya, Maya X, Thorn, Inca, Paro, Tachi, Atlantis Mini / OG Champion, Orcus | ⚠️ não testado |
+| **Pulsar** (chip Sonix) | X2 V3, X2 V3 eS e outros nos receptores 1K/8K | ⚠️ não testado |
+| **Endgame Gear** | OP1w 4k, XM2w 4k (v1 e v2) | ⚠️ não testado |
+| **Attack Shark / Delux** (receptor Beken `1D57`) | X3, X6, X11, R1, V3 Pro, V6, Delux M900 Pro | ⚠️ não testado |
+| **Redragon** (receptor Areson `25A7`) | M913, M915 | ⚠️ não testado |
+| **HID padrão** | Qualquer aparelho USB que informe bateria no formato padrão do HID | ⚠️ não testado |
+| **Bluetooth** | Qualquer fone, mouse ou teclado que mostre a bateria em Configurações > Bluetooth | ⚠️ não testado |
 
-"Experimental" quer dizer que o protocolo segue a documentação pública, mas ainda não foi testado num aparelho real. Se funcionar (ou não) com o seu, abra uma issue com a saída do `--test`.
+"Não testado" quer dizer que o protocolo segue a documentação de projetos abertos (ver abaixo), mas ainda não foi testado com o aparelho aqui. Se funcionar (ou não) com o seu, abra uma issue com o `teste.txt` gerado pelo `--test`.
 
-Os dispositivos são detectados sozinhos ao conectar. Cada um ganha um ícone, com um símbolo de mouse, headset, teclado ou bateria (para outros tipos).
+Aparelhos que podem não ter bateria (por exemplo um teclado Corsair com fio) só ganham ícone depois da primeira leitura válida. Cada aparelho tem o próprio ícone, com um símbolo de mouse, headset, teclado ou bateria.
+
+**Ainda sem suporte** (protocolo não documentado): MSI, headsets Razer (Kraken, BlackShark, Barracuda), HyperX Pulsefire Haste (primeiro modelo), headset do Xbox e Redragon com chip Sinowealth ou Nordic.
 
 ## Cores
 
@@ -59,12 +71,10 @@ Para testar sem abrir a bandeja, rode `BateriaTray.exe --test <pasta>`. Ele list
 
 ## Como funciona
 
-- **Compx**: report `0x08` com o comando `0x04`. A resposta traz a % calculada pelo próprio mouse, o status de carga e a tensão.
-- **MCHOSE BLK**: report `0x55` com `[0x65, 0x01]`. A resposta traz o nível e o status.
-- **Logitech**: HID++ 2.0 pelo canal "long" (`0x11`). Procura as features `0x1004`, `0x1000`, `0x1001` ou `0x1F20` e lê o nome e o tipo pela `0x0005`.
-- **Razer**: feature report de 90 bytes, classe `0x07`, comandos `0x80` (nível) e `0x84` (carregando).
-- **Bluetooth**: lê a propriedade de bateria que o próprio Windows mantém para o dispositivo. Não conversa com o aparelho.
+- A varredura lista as interfaces HID, compara os IDs com a tabela de cada protocolo e abre só as que interessam. Ela acontece ao iniciar, ao conectar um USB e a cada 5 minutos.
+- Cada aparelho é lido uma vez por minuto, ou a cada 20 s enquanto não responde. Tudo roda numa única thread, sem timers extras.
+- O código de cada protocolo está em [`Protocols.cs`](Protocols.cs) (Compx, MCHOSE, Logitech, Razer, Bluetooth) e [`Brands.cs`](Brands.cs) (demais marcas).
 
-O código de cada protocolo está em [`Protocols.cs`](Protocols.cs).
+**Referências dos protocolos** (só os bytes foram consultados; o código foi escrito do zero): [HeadsetControl](https://github.com/Sapd/HeadsetControl), [Wireless-Device-Battery-Monitor](https://github.com/krisgfx9/Wireless-Device-Battery-Monitor), [OpenRazer](https://github.com/openrazer/openrazer), [Solaar](https://github.com/pwr-Solaar/Solaar), [rivalcfg](https://github.com/flozz/rivalcfg), [ckb-next](https://github.com/ckb-next/ckb-next), [glorious-ctl](https://github.com/louis4craft/glorious-ctl), [PulsarBattery](https://github.com/darthsoup/PulsarBattery), [vole](https://github.com/johanneszab/vole) e [attackSharkOnLinux](https://github.com/KaiSta/attackSharkOnLinux).
 
-Projeto independente, sem relação com a Kysona, MCHOSE, Logitech ou Razer.
+Projeto independente, sem relação com nenhum dos fabricantes citados.

@@ -13,9 +13,6 @@ internal static unsafe class App
     const uint NIM_ADD = 0, NIM_MODIFY = 1, NIM_DELETE = 2, NIF_MESSAGE = 1, NIF_ICON = 2, NIF_TIP = 4, NIF_INFO = 0x10;
     const int TICK_MS = 10_000, POLL_OK_MS = 60_000, POLL_RETRY_MS = 20_000, RESCAN_MS = 300_000;
 
-    // VIDs de receptores/dispositivos com protocolo conhecido (o resto nem é aberto)
-    static readonly string[] Vids = { "vid_3554", "vid_291d", "vid_046d", "vid_1532" };
-
     static readonly List<Dev> Devs = new();
     static nint _hwnd;
     static uint _wmTaskbarCreated;
@@ -138,7 +135,8 @@ internal static unsafe class App
 
     static PollResult Poll(Dev d)
     {
-        if (d.Proto != Proto.Bluetooth && d.H == -1) return PollResult.Asleep;
+        // Protocolos com interfaces candidatas abrem o handle sob demanda; os demais precisam dele aberto.
+        if (d.Proto != Proto.Bluetooth && d.Cands == null && d.H == -1) return PollResult.Asleep;
         try
         {
             return d.Proto switch
@@ -147,7 +145,8 @@ internal static unsafe class App
                 Proto.Blk => Blk.Poll(d),
                 Proto.Logitech => Logitech.Poll(d),
                 Proto.Razer => Razer.Poll(d),
-                _ => Bluetooth.Poll(d),
+                Proto.Bluetooth => Bluetooth.Poll(d),
+                _ => Brands.Poll(d),
             };
         }
         catch { return PollResult.Asleep; }
@@ -157,12 +156,13 @@ internal static unsafe class App
     {
         Hid.CloseAll();
         var found = new List<Dev>();
-        ifs = Hid.Enumerate(Vids);
+        ifs = Hid.Enumerate();
         try { Compx.Scan(ifs, found); } catch { }
         try { Blk.Scan(ifs, found); } catch { }
         try { Logitech.Scan(ifs, found); } catch { }
         try { Razer.Scan(ifs, found); } catch { }
         try { Bluetooth.Scan(found); } catch { }
+        Brands.Scan(ifs, found); // demais marcas + HID genérico (por último)
         return found;
     }
 
@@ -176,8 +176,15 @@ internal static unsafe class App
         {
             var e = Devs.Find(x => x.Key == f.Key);
             if (e == null) { f.Present = true; Devs.Add(f); continue; }
+            // Mantém a interface que já funcionava, se ela ainda existir
+            int keep = e.Locked && e.Cands != null && f.Cands != null ? f.Cands.FindIndex(c => c.Path == e.Path) : -1;
             e.H = f.H; e.H2 = f.H2; e.Path = f.Path; e.DevIdx = f.DevIdx; e.FeatIdx = f.FeatIdx; e.Feat = f.Feat;
-            e.TxId = f.TxId; e.InstanceId = f.InstanceId; e.Name = f.Name; e.Kind = f.Kind; e.Present = true;
+            e.TxId = f.TxId; e.InstanceId = f.InstanceId; e.Kind = f.Kind; e.Present = true;
+            e.Vid = f.Vid; e.Pid = f.Pid; e.Bat = f.Bat; e.OutLen = f.OutLen; e.FeatLen = f.FeatLen;
+            e.Cands = f.Cands; e.NeedConfirm = f.NeedConfirm;
+            if (e.Proto != Proto.Xenta) e.Name = f.Name; // Attack Shark: o nome vem dos quadros recebidos
+            if (keep >= 0) e.CandIdx = keep; else { e.CandIdx = 0; e.Locked = false; }
+            if (f.Proto != Proto.CorsairBragi) e.Sub = f.Sub;
         }
         for (int i = Devs.Count - 1; i >= 0; i--)
         {
@@ -211,7 +218,7 @@ internal static unsafe class App
 
     static void UpdateIcon(Dev d)
     {
-        if (!d.Present || d.Hidden) { RemoveIcon(d); return; }
+        if (!d.Present || d.Hidden || (d.NeedConfirm && !d.Confirmed)) { RemoveIcon(d); return; }
 
         string text = d.Pct < 0 ? "–" : d.Pct.ToString();
         // Cor pelo nível: verde = cheio, amarelo = metade, vermelho = acabando.
