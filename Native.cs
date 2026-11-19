@@ -32,6 +32,7 @@ internal static unsafe partial class N
 
     // ---------- shell32 ----------
     [LibraryImport("shell32.dll")] public static partial int Shell_NotifyIconW(uint msg, NOTIFYICONDATAW* d);
+    [LibraryImport("shell32.dll")] public static partial nint ShellExecuteW(nint hwnd, char* op, char* file, char* args, char* dir, int show);
 
     // ---------- kernel32 ----------
     [LibraryImport("kernel32.dll", SetLastError = true)] public static partial nint CreateFileW(char* name, uint access, uint share, nint sa, uint disp, uint flags, nint tmpl);

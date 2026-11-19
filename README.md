@@ -57,9 +57,21 @@ Aparelhos que podem não ter bateria (por exemplo um teclado Corsair com fio) s�
 ## Uso
 
 - **Clique esquerdo**: atualiza na hora.
-- **Clique direito**: Atualizar agora, Procurar dispositivos, Mostrar ícone do dispositivo, Iniciar com o Windows, Sair.
+- **Clique direito**: Atualizar agora, Procurar dispositivos, Relatório de bateria, Mostrar ícone do dispositivo, Iniciar com o Windows, Sair.
 - Dispositivos sem fio só respondem acordados. Se aparecer `--`, use o dispositivo e clique no ícone.
 - Dispositivos Bluetooth pareados mas desconectados não aparecem.
+
+## Relatório de bateria
+
+No menu, **Relatório de bateria** abre uma página no navegador com, para cada aparelho:
+
+- nível atual e gráfico dos últimos 7 dias, com os períodos carregando destacados;
+- quanto dura uma carga completa e quanto ainda resta, estimados pelo consumo médio;
+- consumo médio em %/hora, tempo de recarga, última recarga e número de recargas nos últimos 30 dias;
+- tabela com as leituras;
+- consumo do próprio BateriaTray (RAM e CPU).
+
+O relatório é gerado por um processo à parte, que monta a página e termina na hora: depois de fechar a aba, nada fica rodando. O app da bandeja só grava uma linha em `%LOCALAPPDATA%\BateriaTray\historico.csv` quando a % muda. O arquivo guarda até 90 dias e fica com algumas centenas de KB. As estimativas melhoram com alguns dias de uso.
 
 ## Compilar
 
