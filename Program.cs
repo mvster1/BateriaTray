@@ -22,8 +22,6 @@ internal static unsafe class App
 
     static int Main(string[] args)
     {
-        // Relatório: processo separado e passageiro (gera a página, abre no navegador e termina)
-        if (args.Length >= 1 && args[0] == "--report") return Report.Run(args);
         Hid.Init();
         if (args.Length >= 1 && args[0] == "--test")
             return RunTest(args.Length > 1 ? args[1] : ".");
@@ -129,7 +127,6 @@ internal static unsafe class App
             var r = Poll(d);
             if (r == PollResult.Lost) { d.H = -1; d.Asleep = true; SetTimer(_hwnd, 2, 3000, 0); }
             else if (r == PollResult.Asleep) d.Asleep = true;
-            else History.Log(d); // grava só quando a % ou o estado mudou
             d.NextPoll = now + (r == PollResult.Ok ? POLL_OK_MS : POLL_RETRY_MS);
         }
         UpdateIcons();
@@ -319,14 +316,12 @@ internal static unsafe class App
         bool auto = AutoStart.IsEnabled();
         fixed (char* s1 = "Atualizar agora")
         fixed (char* s5 = "Procurar dispositivos")
-        fixed (char* s6 = "Relatório de bateria")
         fixed (char* s2 = "Iniciar com o Windows")
         fixed (char* s4 = "Mostrar ícone do dispositivo")
         fixed (char* s3 = "Sair")
         {
             AppendMenuW(menu, 0, 1, s1);
             AppendMenuW(menu, 0, 4, s5);
-            AppendMenuW(menu, 0, 5, s6);
             AppendMenuW(menu, 0x800 /*MF_SEPARATOR*/, 0, null);
             AppendMenuW(menu, _showGlyph ? 0x8u : 0u, 3, s4);
             AppendMenuW(menu, auto ? 0x8u /*MF_CHECKED*/ : 0u, 2, s2);
@@ -341,7 +336,6 @@ internal static unsafe class App
         {
             case 1: RefreshNow(); break;
             case 4: Rescan(); break;
-            case 5: OpenReport(); break;
             case 2: AutoStart.Set(!auto); break;
             case 3:
                 _showGlyph = !_showGlyph;
@@ -351,13 +345,6 @@ internal static unsafe class App
                 break;
             case 9: DestroyWindow(_hwnd); break;
         }
-    }
-
-    // Abre o relatório em outro processo: o app da bandeja continua leve.
-    static void OpenReport()
-    {
-        fixed (char* op = "open") fixed (char* exe = Environment.ProcessPath) fixed (char* a = "--report")
-            ShellExecuteW(_hwnd, op, exe, a, null, 0 /*SW_HIDE*/);
     }
 
     static void ReadTheme()

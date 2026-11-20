@@ -50,8 +50,6 @@ internal sealed class Dev
     public long NextPoll;
     public long LinkUpAt;         // HyperX Haste: leitura só é confiável alguns segundos após conectar
     public ulong LastFrame, PrevFrame; // Attack Shark: dois últimos quadros de bateria recebidos
-    public int LoggedPct = -2;    // último valor gravado no histórico
-    public char LoggedState;
 
     // bandeja
     public nint Icon;
